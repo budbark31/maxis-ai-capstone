@@ -1,0 +1,139 @@
+/* Base layout */
+:root {
+  --bg: #131B1A;
+  --surface: #1E2725;
+  --surface-2: #24312E;
+  --border: #2F3C39;
+  --text: #E4E7E6;
+  --sub: #98A5A2;
+  --green: #005C49;
+  --green-2: #0B6F5A;
+  --gold: #B5A36A;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+.app { min-height: 100vh; display: flex; }
+.container { width: 100%; max-width: 1024px; margin: 0 auto; padding: 24px 16px; }
+
+/* Welcome */
+.welcome { text-align: center; display: flex; flex-direction: column; gap: 18px; }
+.logo-wrap { display: flex; justify-content: center; margin-top: 6vh; }
+.logo-hero { width: 140px; height: auto; filter: drop-shadow(0 12px 28px rgba(0,0,0,.35)); }
+.title { font-size: 28px; font-weight: 800; letter-spacing: .2px; margin: 8px 0 0; }
+.title .gold { color: var(--gold); }
+.subtitle { color: var(--sub); margin: 0 0 10px; }
+
+.welcome-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 6px 0 20px;
+}
+.suggested-card {
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 14px 14px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.suggested-card:hover { transform: translateY(-2px); border-color: var(--green-2); box-shadow: 0 0 0 2px rgba(0,92,73,.35), 0 10px 22px -10px rgba(0,0,0,.5); }
+
+/* Chat */
+.chat { display: flex; flex-direction: column; gap: 10px; }
+.chat-scroller {
+  flex: 1;
+  min-height: 55vh;
+  max-height: calc(100vh - 180px);
+  overflow-y: auto;
+  padding: 6px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Bubbles */
+.chat-bubble {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 16px;
+  padding: 12px 14px;
+  max-width: 80%;
+  box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  line-height: 1.5;
+  color: var(--text);
+}
+.chat-bubble.user {
+  margin-left: auto;
+  background: var(--green);
+  border-color: #0F4E40;
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(0,92,73,.25), 0 10px 22px -12px rgba(0,0,0,.5);
+}
+.bubble-text { white-space: pre-wrap; font-size: 14px; }
+.sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(47,60,57,.6); }
+.sources-title { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); margin-bottom: 4px; }
+.source-link { color: #C8B785; text-decoration: none; }
+.source-link:hover { color: #E4D9A6; text-decoration: underline; }
+
+/* Input */
+.prompt-row { margin-top: 8px; }
+.prompt-shell {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 6px 6px 6px 10px;
+}
+.prompt-shell input {
+  flex: 1;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  outline: none;
+  font-size: 15px;
+}
+.prompt-shell input::placeholder { color: var(--sub); opacity: .9; }
+.prompt-shell button {
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  height: 38px;
+  width: 44px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background .2s ease, opacity .2s ease;
+}
+.prompt-shell button:hover { background: var(--green-2); }
+.prompt-shell button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Typing dots */
+.typing-dots span {
+  display: inline-block; width: 8px; height: 8px; margin: 0 3px;
+  border-radius: 9999px; background: #C8B785; animation: bounce 1.1s infinite ease-in-out;
+}
+.typing-dots span:nth-child(2){ animation-delay:.15s; }
+.typing-dots span:nth-child(3){ animation-delay:.30s; }
+@keyframes bounce { 0%,80%,100% { transform: scale(.4); opacity:.4;} 40% { transform: scale(1); opacity:1;} }
+
+/* Animations */
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+.animate-fade-in { animation: fadeIn .3s ease-out both; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-track { background: #131b1a; }
+::-webkit-scrollbar-thumb { background: #24312E; border: 1px solid #2F3C39; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #0B6F5A; }
+* { scrollbar-width: thin; scrollbar-color: #24312E #131b1a; }
+
+

@@ -1,0 +1,13 @@
+# --- Backend Ignores ---
+backend/venv/
+backend/__pycache__/
+backend/.env
+backend/credentials.json  <-- VERY IMPORTANT (Secrets)
+backend/chroma_db/        <-- VERY IMPORTANT (Too big)
+backend/cache/            <-- VERY IMPORTANT (Too big)
+backend/visited_urls.json
+
+# --- Frontend Ignores ---
+frontend/node_modules/
+frontend/.env
+frontend/build/

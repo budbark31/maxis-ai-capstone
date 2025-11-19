@@ -1,0 +1,17 @@
+# --- Universal Ignores ---
+.DS_Store
+.env
+credentials.json
+__pycache__/
+
+# --- Backend (Python) ---
+venv/
+*.pyc
+chroma_db/
+cache/
+
+# --- Frontend (Node) ---
+node_modules/
+build/
+.pnp
+.pnp.js
