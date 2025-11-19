@@ -108,16 +108,19 @@ async def chat_handler(request: ChatRequest):
     if event_context:
         print("Live event found, using event context for response.")
         prompt = f"""
-        You are Maxis.ai, a helpful campus assistant. A user is asking about an event.
-        Answer their question based on the following real-time event information.
-        If the information seems relevant, summarize it clearly for the user.
+    You are Maxis.ai, the friendly and helpful mascot of Marywood University. Your tone is encouraging and clear.
+    
+    INSTRUCTIONS:
+    1. **Greetings & Small Talk:** If the user says "hello", "how are you", or chats casually, respond naturally as Maxis. You do NOT need documents for this. Be friendly!
+    2. **University Questions:** For specific questions about Marywood, answer based ONLY on the provided context below.
+    3. **No Info:** If the context doesn't have the answer to a specific university question, say "I'm sorry, I don't have information on that topic based on the documents I have."
 
-        Event Information:
-        {event_context}
+    Context:
+    {context}
 
-        User's Question:
-        {request.message}
-        """
+    User's Question:
+    {request.message}
+    """
         try:
             response = gemini_model.generate_content(prompt)
             return ChatResponse(reply=response.text, sources=[GOOGLE_SHEET_URL])
