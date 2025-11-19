@@ -113,6 +113,7 @@ def perform_web_search(query: str):
         print(f"Search failed: {e}")
         return None, []
 
+# --- Main Chat Handler ---
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_handler(request: ChatRequest):
     if not gemini_model:
@@ -123,8 +124,21 @@ async def chat_handler(request: ChatRequest):
     # --- PHASE 1: LIVE EVENTS (Google Sheets) ---
     event_context = get_live_events(request.message)
     if event_context:
-        # ... (Keep your existing event logic here) ...
-        pass 
+        # If we find a specific live event, we can usually just return that
+        prompt = f"""
+        You are Maxis.ai, the spirited mascot and AI assistant of Marywood University.
+        User Question: {request.message}
+        
+        Real-Time Event Data:
+        {event_context}
+        
+        Task: Answer the question enthusiastically using the event data above.
+        """
+        try:
+            response = gemini_model.generate_content(prompt)
+            return ChatResponse(reply=response.text, sources=[GOOGLE_SHEET_URL])
+        except Exception:
+            pass 
 
     # --- PHASE 2: DATABASE SEARCH (RAG) ---
     retrieved_results = collection.query(
@@ -140,44 +154,55 @@ async def chat_handler(request: ChatRequest):
     scores = cross_encoder_model.predict(pairs)
     scored_docs = sorted(zip(scores, retrieved_docs, retrieved_metadatas), key=lambda x: x[0], reverse=True)
     
-    # Filter for HIGH QUALITY matches only
-    # (If the best match is weak, we should just go to the web)
-    top_docs = [doc for score, doc, meta in scored_docs[:5] if score > 0.2] 
-    
+    # Keep top 5, even if they have lower scores (we will let Gemini judge them)
+    # Only filter out absolute garbage (e.g. negative scores if using logits, or very low)
+    top_rag_docs = [doc for score, doc, meta in scored_docs[:5] if score > -2.0] 
+    best_rag_score = scores[0] if scores else -10
+
     sources = []
-    context_text = ""
-    
-    # --- PHASE 3: THE DECISION ---
-    
-    if top_docs:
-        print("  Found good database matches. Using RAG.")
-        context_text = "\n\n".join(top_docs)
+    context_parts = []
+
+    # Add RAG Docs to context
+    if top_rag_docs:
+        rag_text = "\n\n".join(top_rag_docs)
+        context_parts.append(f"--- INTERNAL UNIVERSITY DOCUMENTS ---\n{rag_text}")
+        
         for _, doc, meta in scored_docs[:5]:
             if meta.get('source') and meta.get('source') not in sources:
                 sources.append(meta.get('source'))
-                
-    else:
-        print("  Database matches are weak. Switching to Web Search...")
+
+    # --- PHASE 3: THE DECISION (Augment, Don't Replace) ---
+    
+    # Logic: If the best internal match is "weak" (less than 1.0), 
+    # OR if we found nothing, run a web search to help out.
+    if best_rag_score < 1.0:
+        print(f"  Database confidence is low ({best_rag_score:.2f}). Adding Web Search...")
         web_text, web_sources = perform_web_search(request.message)
         if web_text:
-            context_text = web_text
-            sources = web_sources
-        else:
-            # If both fail, empty context will trigger the "I don't know" response
-            context_text = ""
+            context_parts.append(f"--- WEB SEARCH RESULTS ---\n{web_text}")
+            # Add web sources to the list
+            for src in web_sources:
+                if src not in sources:
+                    sources.append(src)
+    else:
+        print(f"  Database confidence is high ({best_rag_score:.2f}). Skipping Web Search.")
+
+    # Combine everything
+    full_context = "\n\n".join(context_parts)
 
     # --- PHASE 4: GENERATE ANSWER ---
     prompt = f"""
-    You are Maxis.ai, the friendly mascot of Marywood University.
+    You are Maxis.ai, the friendly, helpful, and spirited mascot of Marywood University.
     
     INSTRUCTIONS:
     1. Answer the user's question using the Context provided below.
-    2. If the context is a "Web Search Result", explicitly mention that you found this info on the web.
-    3. If the context is empty, politely say you don't know.
-    4. Be helpful, encouraging, and concise.
+    2. **Prioritize "INTERNAL UNIVERSITY DOCUMENTS"** as the source of truth.
+    3. Use "WEB SEARCH RESULTS" to fill in gaps (like recent game scores or news) that aren't in the internal documents.
+    4. If you use information from the web, briefly mention that (e.g., "I found this on the web...").
+    5. Be helpful, encouraging, and concise. Do not use Markdown formatting (no asterisks).
 
     Context:
-    {context_text}
+    {full_context}
 
     User's Question:
     {request.message}
@@ -185,7 +210,7 @@ async def chat_handler(request: ChatRequest):
     
     try:
         response = gemini_model.generate_content(prompt)
-        return ChatResponse(reply=response.text, sources=sources)
+        return ChatResponse(reply=response.text, sources=sources[:5]) # Limit to 5 sources
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate response.")
