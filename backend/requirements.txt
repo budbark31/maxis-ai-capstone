@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+google-generativeai
+chromadb
+sentence-transformers
+python-dotenv
+pydantic
+gspread
+google-auth
+pytz
+requests
