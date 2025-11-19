@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import ReactMarkdown from 'react-markdown';
 import "./App.css";
 
 // Icons
@@ -108,7 +109,9 @@ export default function App() {
               const isUser = msg.sender === "user";
               return (
                 <div key={idx} className={`chat-bubble ${isUser ? "user" : "bot"} animate-fade-in`}>
-                  <p className="bubble-text">{msg.text}</p>
+                  <div className="bubble-text">
+                  <ReactMarkdown>{msg.text}</ReactMarkdown>
+                  </div>
                   {!isUser && msg.sources?.length > 0 && (
                     <div className="sources">
                       <div className="sources-title">Sources</div>
