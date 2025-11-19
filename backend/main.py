@@ -1,6 +1,7 @@
 import os
 import google.generativeai as genai
 import chromadb
+from duckduckgo_search import DDGS  # <--- NEW
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -96,7 +97,22 @@ def get_live_events(query: str):
         print(f"Error fetching from Google Sheet: {e}")
         return None
 
-# --- Chat Handler Logic (changed) ---
+def perform_web_search(query: str):
+    print(f"  Performing Web Search for: {query}")
+    try:
+        results = DDGS().text(f"Marywood University {query}", max_results=3)
+        if not results:
+            return None
+            
+        search_context = "Web Search Results:\n"
+        for r in results:
+            search_context += f"- {r['title']}: {r['body']} (Source: {r['href']})\n"
+        
+        return search_context, [r['href'] for r in results]
+    except Exception as e:
+        print(f"Search failed: {e}")
+        return None, []
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_handler(request: ChatRequest):
     if not gemini_model:
@@ -104,61 +120,63 @@ async def chat_handler(request: ChatRequest):
 
     print(f"Received query: {request.message}")
 
-    # 1. Try Live Events
+    # --- PHASE 1: LIVE EVENTS (Google Sheets) ---
     event_context = get_live_events(request.message)
     if event_context:
-        prompt = f"""
-        You are Maxis.ai, the spirited mascot and AI assistant of Marywood University.
-        User Question: {request.message}
-        
-        Real-Time Event Data:
-        {event_context}
-        
-        Task: Answer the question enthusiastically using the event data above.
-        """
-        try:
-            response = gemini_model.generate_content(prompt)
-            return ChatResponse(reply=response.text, sources=[GOOGLE_SHEET_URL])
-        except Exception:
-            pass # Fallback to RAG if this fails
-    
-    # 2. RAG Search
+        # ... (Keep your existing event logic here) ...
+        pass 
+
+    # --- PHASE 2: DATABASE SEARCH (RAG) ---
     retrieved_results = collection.query(
         query_texts=[request.message],
-        n_results=15, # Fetch more chunks so Gemini has more context to summarize
+        n_results=15,
         include=['documents', 'metadatas']
     )
     retrieved_docs = retrieved_results.get('documents', [[]])[0]
     retrieved_metadatas = retrieved_results.get('metadatas', [[]])[0]
 
-    # Rank and Filter
+    # Re-Rank
     pairs = [[request.message, doc] for doc in retrieved_docs]
     scores = cross_encoder_model.predict(pairs)
     scored_docs = sorted(zip(scores, retrieved_docs, retrieved_metadatas), key=lambda x: x[0], reverse=True)
     
-    # Keep top 5 most relevant chunks
-    top_docs = [doc for score, doc, meta in scored_docs[:5] if score > 0] # Only keep positive relevance
+    # Filter for HIGH QUALITY matches only
+    # (If the best match is weak, we should just go to the web)
+    top_docs = [doc for score, doc, meta in scored_docs[:5] if score > 0.2] 
     
-    # Extract Sources
-    seen_srcs = []
-    for _, doc, meta in scored_docs[:5]:
-        if meta.get('source') and meta.get('source') not in seen_srcs:
-            seen_srcs.append(meta.get('source'))
+    sources = []
+    context_text = ""
+    
+    # --- PHASE 3: THE DECISION ---
+    
+    if top_docs:
+        print("  Found good database matches. Using RAG.")
+        context_text = "\n\n".join(top_docs)
+        for _, doc, meta in scored_docs[:5]:
+            if meta.get('source') and meta.get('source') not in sources:
+                sources.append(meta.get('source'))
+                
+    else:
+        print("  Database matches are weak. Switching to Web Search...")
+        web_text, web_sources = perform_web_search(request.message)
+        if web_text:
+            context_text = web_text
+            sources = web_sources
+        else:
+            # If both fail, empty context will trigger the "I don't know" response
+            context_text = ""
 
-    context_text = "\n\n".join(top_docs)
-    
-    # 3. The "Natural" Prompt
+    # --- PHASE 4: GENERATE ANSWER ---
     prompt = f"""
-    You are Maxis.ai, the friendly, helpful, and spirited mascot of Marywood University.
-    Your goal is to be a helpful guide, not a robot reading from a script.
-
+    You are Maxis.ai, the friendly mascot of Marywood University.
+    
     INSTRUCTIONS:
-    1. **Synthesize, Don't Quote:** Read the Context below, understand it, and explain the answer to the user in your own words. Do not just copy-paste sentences.
-    2. **Be Conversational:** If the user greets you, greet them back warmly before addressing their question.
-    3. **Honesty:** If the context doesn't contain the answer, admit it gracefully. Say something like, "I checked my university documents, but I couldn't find that specific detail."
-    4. **Formatting:** Use bullet points or short paragraphs to make the answer easy to read.
+    1. Answer the user's question using the Context provided below.
+    2. If the context is a "Web Search Result", explicitly mention that you found this info on the web.
+    3. If the context is empty, politely say you don't know.
+    4. Be helpful, encouraging, and concise.
 
-    Context from University Documents:
+    Context:
     {context_text}
 
     User's Question:
@@ -167,79 +185,7 @@ async def chat_handler(request: ChatRequest):
     
     try:
         response = gemini_model.generate_content(prompt)
-        return ChatResponse(reply=response.text, sources=seen_srcs)
+        return ChatResponse(reply=response.text, sources=sources)
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate response.")
-    
-    print("No live events found or event-based generation failed. Performing RAG search.")
-    retrieved_results = collection.query(
-        query_texts=[request.message],
-        n_results=10,
-        include=['documents', 'metadatas']
-    )
-    retrieved_docs = retrieved_results.get('documents', [[]])[0]
-    retrieved_metadatas = retrieved_results.get('metadatas', [[]])[0]
-    
-    if not retrieved_docs:
-        return ChatResponse(reply="I'm sorry, I couldn't find any information on that topic.", sources=[])
-
-    print(f"Re-ranking {len(retrieved_docs)} documents...")
-    pairs = [[request.message, doc] for doc in retrieved_docs]
-    scores = cross_encoder_model.predict(pairs)
-    
-    scored_docs = sorted(zip(scores, retrieved_docs, retrieved_metadatas), key=lambda x: x[0], reverse=True)
-    
-    top_k_docs = [doc for score, doc, meta in scored_docs[:5]]
-
-    # Prefer official marywood.edu sources over athletics site and cached_document
-    def domain_score(url: str) -> int:
-        if not url: return 0
-        try:
-            netloc = urlparse(url).netloc.lower()
-        except Exception:
-            netloc = url.lower()
-        if 'marywood.edu' in netloc:
-            return 100
-        if 'marywoodpacers.com' in netloc:
-            return 10
-        if url == 'cached_document':
-            return 1
-        return 50
-
-    seen_srcs = []
-    for _, doc, meta in scored_docs[:20]:
-        src = None
-        try:
-            src = meta.get('source') if isinstance(meta, dict) else None
-        except Exception:
-            src = None
-        if not src:
-            continue
-        if src in seen_srcs:
-            continue
-        seen_srcs.append(src)
-
-    # sort seen sources by domain priority and return top 5
-    source_urls = sorted(seen_srcs, key=lambda u: domain_score(u), reverse=True)[:5]
-
-    context = "\n\n".join(top_k_docs)
-    
-    prompt = f"""
-    You are Maxis.ai, the friendly and helpful mascot of Marywood University. Your tone is encouraging and clear.
-    Answer the user's question based ONLY on the following context.
-    If the context does not contain the answer, say "I'm sorry, I don't have information on that topic based on the documents I have."
-
-    Context:
-    {context}
-
-    User's Question:
-    {request.message}
-    """
-    try:
-        response = gemini_model.generate_content(prompt)
-        return ChatResponse(reply=response.text, sources=source_urls)
-    except Exception as e:
-        print(f"Error generating RAG response: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate RAG response.")
-
