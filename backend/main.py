@@ -1,7 +1,6 @@
 import os
 import google.generativeai as genai
 import chromadb
-from duckduckgo_search import DDGS  # <--- NEW
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -12,6 +11,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from urllib.parse import urlparse
 import pytz
+from duckduckgo_search import DDGS  # <--- NEW SEARCH TOOL
 
 # --- Configuration ---
 load_dotenv()
@@ -25,7 +25,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), 'credentials.json')
 TIMEZONE = pytz.timezone('America/New_York')
 
-# --- Pydantic Models (Unchanged) ---
+# --- Pydantic Models ---
 class ChatRequest(BaseModel): message: str
 class ChatResponse(BaseModel): reply: str; sources: list[str]
 
@@ -47,12 +47,12 @@ except Exception as e:
     print(f"FATAL: Could not load models or connect to services: {e}")
     gemini_model = None
 
-# --- FastAPI App (Unchanged) ---
+# --- FastAPI App ---
 app = FastAPI()
 origins = ["http://localhost:3000"]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- Helper Function for Live Events (Unchanged) ---
+# --- Helper: Live Events ---
 def get_live_events(query: str):
     print("Checking for live events...")
     try:
@@ -72,7 +72,6 @@ def get_live_events(query: str):
                     if event_dt > now:
                         relevant_events.append(event)
                 except (ValueError, TypeError):
-                    print(f"Could not parse date/time for event: {event.get('Event Name')} - '{event.get('Date')} {event.get('End Time')}'")
                     continue
         
         if not relevant_events:
@@ -90,19 +89,18 @@ def get_live_events(query: str):
         
         return event_context
 
-    except gspread.exceptions.APIError as e:
-         print(f"Google Sheets API Error: {e}. Check sharing permissions and API key.")
-         return None
     except Exception as e:
         print(f"Error fetching from Google Sheet: {e}")
         return None
 
+# --- Helper: Web Search ---
 def perform_web_search(query: str):
     print(f"  Performing Web Search for: {query}")
     try:
+        # Use the free DuckDuckGo search
         results = DDGS().text(f"Marywood University {query}", max_results=3)
         if not results:
-            return None
+            return None, []
             
         search_context = "Web Search Results:\n"
         for r in results:
@@ -113,7 +111,7 @@ def perform_web_search(query: str):
         print(f"Search failed: {e}")
         return None, []
 
-# --- Main Chat Handler ---
+# --- Chat Handler ---
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_handler(request: ChatRequest):
     if not gemini_model:
@@ -124,7 +122,6 @@ async def chat_handler(request: ChatRequest):
     # --- PHASE 1: LIVE EVENTS (Google Sheets) ---
     event_context = get_live_events(request.message)
     if event_context:
-        # If we find a specific live event, we can usually just return that
         prompt = f"""
         You are Maxis.ai, the spirited mascot and AI assistant of Marywood University.
         User Question: {request.message}
@@ -154,8 +151,7 @@ async def chat_handler(request: ChatRequest):
     scores = cross_encoder_model.predict(pairs)
     scored_docs = sorted(zip(scores, retrieved_docs, retrieved_metadatas), key=lambda x: x[0], reverse=True)
     
-    # Keep top 5, even if they have lower scores (we will let Gemini judge them)
-    # Only filter out absolute garbage (e.g. negative scores if using logits, or very low)
+    # Filter: Keep things that aren't totally irrelevant (score > -2.0)
     top_rag_docs = [doc for score, doc, meta in scored_docs[:5] if score > -2.0] 
     best_rag_score = scores[0] if scores else -10
 
@@ -172,22 +168,18 @@ async def chat_handler(request: ChatRequest):
                 sources.append(meta.get('source'))
 
     # --- PHASE 3: THE DECISION (Augment, Don't Replace) ---
-    
-    # Logic: If the best internal match is "weak" (less than 1.0), 
-    # OR if we found nothing, run a web search to help out.
+    # Only search web if internal confidence is not "excellent" (less than 1.0)
     if best_rag_score < 1.0:
-        print(f"  Database confidence is low ({best_rag_score:.2f}). Adding Web Search...")
+        print(f"  Database confidence is {best_rag_score:.2f}. Augmenting with Web Search...")
         web_text, web_sources = perform_web_search(request.message)
         if web_text:
             context_parts.append(f"--- WEB SEARCH RESULTS ---\n{web_text}")
-            # Add web sources to the list
             for src in web_sources:
                 if src not in sources:
                     sources.append(src)
     else:
         print(f"  Database confidence is high ({best_rag_score:.2f}). Skipping Web Search.")
 
-    # Combine everything
     full_context = "\n\n".join(context_parts)
 
     # --- PHASE 4: GENERATE ANSWER ---
@@ -197,7 +189,7 @@ async def chat_handler(request: ChatRequest):
     INSTRUCTIONS:
     1. Answer the user's question using the Context provided below.
     2. **Prioritize "INTERNAL UNIVERSITY DOCUMENTS"** as the source of truth.
-    3. Use "WEB SEARCH RESULTS" to fill in gaps (like recent game scores or news) that aren't in the internal documents.
+    3. Use "WEB SEARCH RESULTS" to fill in gaps (like specific game scores or news).
     4. If you use information from the web, briefly mention that (e.g., "I found this on the web...").
     5. Be helpful, encouraging, and concise. Do not use Markdown formatting (no asterisks).
 
@@ -210,7 +202,7 @@ async def chat_handler(request: ChatRequest):
     
     try:
         response = gemini_model.generate_content(prompt)
-        return ChatResponse(reply=response.text, sources=sources[:5]) # Limit to 5 sources
+        return ChatResponse(reply=response.text, sources=sources[:5])
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate response.")
