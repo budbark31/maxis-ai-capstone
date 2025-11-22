@@ -147,13 +147,20 @@ async def chat_handler(request: ChatRequest):
     retrieved_metadatas = retrieved_results.get('metadatas', [[]])[0]
 
     # Re-Rank
-    pairs = [[request.message, doc] for doc in retrieved_docs]
-    scores = cross_encoder_model.predict(pairs)
-    scored_docs = sorted(zip(scores, retrieved_docs, retrieved_metadatas), key=lambda x: x[0], reverse=True)
-    
+    if retrieved_docs:
+        pairs = [[request.message, doc] for doc in retrieved_docs]
+        scores = cross_encoder_model.predict(pairs)
+        scored_docs = sorted(zip(scores, retrieved_docs, retrieved_metadatas), key=lambda x: x[0], reverse=True)
+    else:
+        scored_docs = []
+
     # Filter: Keep things that aren't totally irrelevant (score > -2.0)
     top_rag_docs = [doc for score, doc, meta in scored_docs[:5] if score > -2.0] 
-    best_rag_score = scores[0] if scores else -10
+    
+    # --- FIX IS HERE ---
+    # Old (Crashing) line: best_rag_score = scores[0] if scores else -10
+    # New (Safe) line: Get the highest score from the sorted list, or -10 if empty
+    best_rag_score = scored_docs[0][0] if scored_docs else -10
 
     sources = []
     context_parts = []
