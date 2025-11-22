@@ -151,3 +151,46 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter,
 .bubble-text strong {
   font-weight: bold;
 }
+
+/* Source Box Styling */
+.sources-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 0.75rem;
+}
+
+.source-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-decoration: none;
+  color: #1f2937;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  max-width: 100%;
+}
+
+.source-card:hover {
+  background-color: #e5e7eb;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.source-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+
+.source-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px; /* Truncates long URLs */
+}
