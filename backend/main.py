@@ -119,19 +119,17 @@ async def chat_handler(request: ChatRequest):
 
     print(f"Received query: {request.message}")
 
-    # --- PHASE 1: LIVE EVENTS (Google Sheets) ---
+    # --- PHASE 1: LIVE EVENTS ---
     event_context = get_live_events(request.message)
     if event_context:
-        prompt = f"""
-        You are Maxis.ai, the spirited mascot and AI assistant of Marywood University.
-        User Question: {request.message}
-        
-        Real-Time Event Data:
-        {event_context}
-        
-        Task: Answer the question enthusiastically using the event data above.
-        """
+        # (Same event logic as before)
         try:
+            prompt = f"""
+            You are Maxis.ai, the spirited AI assistant of Marywood University.
+            User Question: {request.message}
+            Real-Time Event Data: {event_context}
+            Task: Answer enthusiastically using the event data.
+            """
             response = gemini_model.generate_content(prompt)
             return ChatResponse(reply=response.text, sources=[GOOGLE_SHEET_URL])
         except Exception:
@@ -154,28 +152,21 @@ async def chat_handler(request: ChatRequest):
     else:
         scored_docs = []
 
-    # Filter: Keep things that aren't totally irrelevant (score > -2.0)
+    # Filter out garbage (score > -2.0)
     top_rag_docs = [doc for score, doc, meta in scored_docs[:5] if score > -2.0] 
-    
-    # --- FIX IS HERE ---
-    # Old (Crashing) line: best_rag_score = scores[0] if scores else -10
-    # New (Safe) line: Get the highest score from the sorted list, or -10 if empty
     best_rag_score = scored_docs[0][0] if scored_docs else -10
 
     sources = []
     context_parts = []
 
-    # Add RAG Docs to context
     if top_rag_docs:
         rag_text = "\n\n".join(top_rag_docs)
         context_parts.append(f"--- INTERNAL UNIVERSITY DOCUMENTS ---\n{rag_text}")
-        
         for _, doc, meta in scored_docs[:5]:
             if meta.get('source') and meta.get('source') not in sources:
                 sources.append(meta.get('source'))
 
-    # --- PHASE 3: THE DECISION (Augment, Don't Replace) ---
-    # Only search web if internal confidence is not "excellent" (less than 1.0)
+    # --- PHASE 3: AUGMENT WITH WEB SEARCH ---
     if best_rag_score < 1.0:
         print(f"  Database confidence is {best_rag_score:.2f}. Augmenting with Web Search...")
         web_text, web_sources = perform_web_search(request.message)
@@ -184,21 +175,21 @@ async def chat_handler(request: ChatRequest):
             for src in web_sources:
                 if src not in sources:
                     sources.append(src)
-    else:
-        print(f"  Database confidence is high ({best_rag_score:.2f}). Skipping Web Search.")
 
     full_context = "\n\n".join(context_parts)
 
-    # --- PHASE 4: GENERATE ANSWER ---
+    # --- PHASE 4: THE "DIRECT ANSWER" PROMPT ---
     prompt = f"""
-    You are Maxis.ai, the friendly, helpful, and spirited mascot of Marywood University.
+    You are Maxis.ai, the knowledgeable and helpful AI assistant for Marywood University.
     
     INSTRUCTIONS:
-    1. Answer the user's question using the Context provided below.
-    2. **Prioritize "INTERNAL UNIVERSITY DOCUMENTS"** as the source of truth.
-    3. Use "WEB SEARCH RESULTS" to fill in gaps (like specific game scores or news).
-    4. If you use information from the web, briefly mention that (e.g., "I found this on the web...").
-    5. Be helpful, encouraging, and concise. Do not use Markdown formatting (no asterisks).
+    1. **Be Direct & Explicit:** Do NOT tell the user to "check the website" or "visit the link" if the information is available in the Context. Extract the specific facts (dates, names, policies, costs) and state them clearly.
+    2. **Smart Hyperlinks:** If you reference a specific resource (like a form, schedule, or portal), you MUST provide a clickable link using Markdown format: `[Link Text](URL)`. 
+       - BAD: "Check the schedule on our website."
+       - GOOD: "You can view the full [Athletics Schedule](https://marywoodpacers.com/...) for upcoming games."
+    3. **Formatting:** Use **bold** for key terms and bullet points for lists to make the answer readable.
+    4. **Source of Truth:** Trust Internal Documents first. Use Web Search results to fill gaps.
+    5. **Honesty:** If the exact detail isn't in the context, say "I don't have the specific details on that right now," rather than guessing.
 
     Context:
     {full_context}
