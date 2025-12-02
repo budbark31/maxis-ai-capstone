@@ -12,6 +12,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 import pytz
 from duckduckgo_search import DDGS 
+import re
 
 # --- Configuration ---
 load_dotenv()
@@ -25,16 +26,15 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 SERVICE_ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), 'credentials.json')
 TIMEZONE = pytz.timezone('America/New_York')
 
-# --- Data Models ---
 class ChatRequest(BaseModel): 
     message: str
-    history: list[dict] = [] # Accepts chat history
+    history: list[dict] = []
 
 class ChatResponse(BaseModel): 
     reply: str
     sources: list[str]
 
-# --- Setup Resources ---
+# --- Setup ---
 try:
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     gemini_model = genai.GenerativeModel(GEMINI_MODEL_NAME)
@@ -42,7 +42,6 @@ try:
     cross_encoder_model = CrossEncoder(CROSS_ENCODER_MODEL_NAME)
     db_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     collection = db_client.get_collection(name=COLLECTION_NAME)
-    
     creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     gc = gspread.authorize(creds)
     spreadsheet = gc.open_by_url(GOOGLE_SHEET_URL)
@@ -55,15 +54,12 @@ except Exception as e:
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- Helper Functions ---
-
+# --- Helpers ---
 def get_live_events(query: str):
-    """Fetches relevant rows from Google Sheet based on query keywords."""
     try:
         records = sheet.get_all_records()
         now = datetime.now(TIMEZONE)
         relevant_events = []
-        
         for event in records:
             if any(keyword.lower() in str(event.values()).lower() for keyword in query.lower().split()):
                 try:
@@ -72,64 +68,91 @@ def get_live_events(query: str):
                         event_dt = TIMEZONE.localize(datetime.strptime(event_dt_str, '%m/%d/%Y %I:%M:%S %p'))
                     except ValueError:
                         event_dt = TIMEZONE.localize(datetime.strptime(event_dt_str, '%m/%d/%Y %H:%M:%S'))
-
-                    if event_dt > now:
-                        relevant_events.append(event)
-                except (ValueError, TypeError):
-                    continue
-        
+                    if event_dt > now: relevant_events.append(event)
+                except: continue
         if not relevant_events: return None
-        
         event_context = "Here are some relevant, upcoming events:\n"
         for event in relevant_events:
             event_context += f"- {event.get('Event Name')} on {event.get('Date')} ({event.get('Brief Description')})\n"
         return event_context
     except: return None
 
-def perform_web_search(query: str):
-    """Performs a live web search using DuckDuckGo."""
-    print(f"  Performing Web Search for: {query}")
+# --- NEW: Smart Query Expansion ---
+def perform_web_search(user_query: str):
+    # 1. Clean the query
+    clean_query = re.sub(r'\b(what|is|the|last|recent|latest|score|game|result|did|they|win|lose)\b', '', user_query, flags=re.IGNORECASE).strip()
+    
+    # 2. Basic Search Query
+    if "marywood" not in clean_query.lower():
+        search_query = f"Marywood University {clean_query}"
+    else:
+        search_query = clean_query
+
+    # 3. CRITICAL: Inject "Current Season" Year
+    # If users ask about sports, we force the search engine to look for "2025-26"
+    # This prevents it from finding the "2024-25 Season Recap" page.
+    now = datetime.now(TIMEZONE)
+    if any(x in user_query.lower() for x in ['score', 'game', 'result', 'schedule', 'record', 'won', 'lost']):
+        # If it's Aug-Dec, the season is Year-(Year+1) (e.g. 2025-26)
+        # If it's Jan-July, the season is (Year-1)-Year (e.g. 2025-26)
+        if now.month >= 8:
+            season_str = f"{now.year}-{str(now.year+1)[-2:]}"
+        else:
+            season_str = f"{now.year-1}-{str(now.year)[-2:]}"
+        
+        search_query += f" {season_str} schedule results"
+
+    print(f"  Performing Smart Web Search for: '{search_query}'")
+    
     try:
-        results = DDGS().text(f"Marywood University {query}", max_results=3)
+        # Fetch 8 results to ensure we hit the schedule page
+        results = DDGS().text(search_query, max_results=8) 
         if not results: return None, []
+        
         search_context = "Web Search Results:\n"
         for r in results:
             search_context += f"- {r['title']}: {r['body']} (Source: {r['href']})\n"
+        
         return search_context, [r['href'] for r in results]
     except Exception as e:
-        print(f"Search error: {e}")
+        print(f"Search failed: {e}")
         return None, []
 
-# --- Main Chat Handler ---
+@app.get("/api/stats")
+async def get_stats():
+    try:
+        count = collection.count()
+        return {"status": "online", "documents_indexed": count, "model": GEMINI_MODEL_NAME}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
+# --- Chat Handler ---
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_handler(request: ChatRequest):
     if not gemini_model: raise HTTPException(status_code=503, detail="AI Unavailable")
     print(f"Received query: {request.message}")
 
-    # 1. Format Chat History (Last 6 turns to save context)
+    # 1. Time Context
+    current_time = datetime.now(TIMEZONE)
+    current_time_str = current_time.strftime("%A, %B %d, %Y")
+    
+    # 2. History
     conversation_history = ""
     for turn in request.history[-6:]: 
         role = "User" if turn['sender'] == "user" else "Maxis"
         clean_text = turn['text'].replace("\n", " ") 
         conversation_history += f"{role}: {clean_text}\n"
 
-    # 2. Check Live Events
+    # 3. Live Events
     event_context = get_live_events(request.message)
     if event_context:
         try:
-            prompt = f"""
-            You are Maxis.ai. 
-            History: {conversation_history}
-            User Question: {request.message}
-            Event Data: {event_context}
-            Task: Answer enthusiastically using the event data.
-            """
+            prompt = f"You are Maxis.ai. Time: {current_time_str}\nHistory: {conversation_history}\nUser: {request.message}\nData: {event_context}\nTask: Answer enthusiastically."
             response = gemini_model.generate_content(prompt)
             return ChatResponse(reply=response.text, sources=[GOOGLE_SHEET_URL])
         except: pass
 
-    # 3. RAG Search (Internal Docs)
+    # 4. RAG Search
     retrieved = collection.query(query_texts=[request.message], n_results=15, include=['documents', 'metadatas'])
     docs = retrieved.get('documents', [[]])[0]
     metas = retrieved.get('metadatas', [[]])[0]
@@ -140,33 +163,35 @@ async def chat_handler(request: ChatRequest):
         scores = cross_encoder_model.predict(pairs)
         scored_docs = sorted(zip(scores, docs, metas), key=lambda x: x[0], reverse=True)
 
-    # 4. Web Search (Always active for augmentation)
+    # 5. Web Search
     web_text, web_sources = perform_web_search(request.message)
     
-    # 5. Build Context
+    # 6. Build Context
     sources = []
     context_parts = []
 
-    # Add Top Internal Docs (Filter out absolute garbage, score > -2.0)
+    # Add Top Internal Docs
     top_docs = [d for s, d, m in scored_docs[:5] if s > -2.0]
     if top_docs:
-        context_parts.append(f"--- TRUSTED CAMPUS KNOWLEDGE ---\n" + "\n\n".join(top_docs))
+        context_parts.append(f"--- INTERNAL HANDBOOKS (STATIC POLICY DATA) ---\n" + "\n\n".join(top_docs))
         for _, _, m in scored_docs[:5]:
             if m.get('source') and m.get('source') not in sources: sources.append(m.get('source'))
 
     # Add Web Docs
     if web_text:
-        context_parts.append(f"--- LATEST WEB INFO ---\n{web_text}")
+        context_parts.append(f"--- WEB SEARCH RESULTS (LIVE NEWS DATA) ---\n{web_text}")
         for src in web_sources:
             if src not in sources: sources.append(src)
 
     full_context = "\n\n".join(context_parts)
 
-    # 6. Generate Answer (The Prompt)
+    # 7. Generate Answer
     prompt = f"""
-    You are Maxis.ai, the spirited and knowledgeable AI mascot for Marywood University.
+    You are Maxis.ai, the spirited AI mascot for Marywood University.
     
-    RECENT CONVERSATION HISTORY:
+    TODAY'S DATE: {current_time_str}
+    
+    HISTORY:
     {conversation_history}
 
     KNOWLEDGE BASE:
@@ -176,14 +201,12 @@ async def chat_handler(request: ChatRequest):
     {request.message}
 
     INSTRUCTIONS:
-    1. **Be Specific:** If the user asks about athletics, LIST the sports. If they ask about majors, LIST the majors. Do not just say "we offer many sports."
-    2. **Use Bullet Points or other Formatting:** For lists (teams, dates, requirements), use bullet points or other list formatting to make it readable. Use paragraphs and other text sectioning for explanations.
-    3. **No Meta-Talk:** The user CANNOT see the "Knowledge Base" or "Context". 
-       - NEVER say "As seen in the internal docs..." or "The context provided..."
-       - Just say "Marywood offers..." or "I found that..."
-    4. **Source Blending:** Seamlessly blend the "Trusted Campus Knowledge" (Policies/Facts) with "Web Info" (News/Scores).
-    5. **Direct & Honest:** Extract the answer directly. If the exact list/fact is missing, say "I couldn't find the specific list in my records, but generally..." rather than making it up.
-    6. **Formatting:** Use **bold** for emphasis. Use Markdown links `[Link Name](URL)`.
+    1. **Trust Hierarchy:** - If the question is about **POLICIES** (e.g., grades, housing, rules), trust the INTERNAL HANDBOOKS.
+       - If the question is about **NEWS/SPORTS/EVENTS** (e.g., last game, scores, schedule), trust the WEB SEARCH RESULTS.
+       - **CRITICAL:** Internal Handbooks are static and might have old schedules (e.g. Feb 2025). If Web Search shows a game from Nov/Dec 2025, THAT IS THE CORRECT ONE. Ignore the old handbook date.
+    2. **Be Specific:** List scores, opponents, and specific dates.
+    3. **No Meta-Talk:** Do not mention "internal docs" or "web search".
+    4. **Formatting:** Use **bold** for key terms and bullet points for lists. Use Markdown links `[Link Name](URL)`.
     """
 
     try:
