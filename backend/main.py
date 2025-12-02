@@ -201,12 +201,16 @@ async def chat_handler(request: ChatRequest):
     {request.message}
 
     INSTRUCTIONS:
-    1. **Trust Hierarchy:** - If the question is about **POLICIES** (e.g., grades, housing, rules), trust the INTERNAL HANDBOOKS.
-       - If the question is about **NEWS/SPORTS/EVENTS** (e.g., last game, scores, schedule), trust the WEB SEARCH RESULTS.
-       - **CRITICAL:** Internal Handbooks are static and might have old schedules (e.g. Feb 2025). If Web Search shows a game from Nov/Dec 2025, THAT IS THE CORRECT ONE. Ignore the old handbook date.
-    2. **Be Specific:** List scores, opponents, and specific dates.
-    3. **No Meta-Talk:** Do not mention "internal docs" or "web search".
-    4. **Formatting:** Use **bold** for key terms and bullet points for lists. Use Markdown links `[Link Name](URL)`.
+    1. **Time Awareness:** You MUST contextualize all information relative to TODAY'S DATE.
+       - If the user asks for "current", "next", "latest", or "recent" information (whether sports, academic dates, or events), prioritize the data closest to TODAY.
+       - Discard outdated schedules (e.g., last year's calendar) in favor of the current or upcoming academic year.
+       - Example: If today is Dec 2025, a "Fall 2025" document is relevant, but a "Spring 2025" document is past.
+    2. **Trust Hierarchy:**
+       - For **DYNAMIC INFO** (News, Sports, Events, Deadlines): Trust "WEB SEARCH RESULTS" or the most recent date found.
+       - For **STATIC POLICY** (Rules, grading, housing guidelines): Trust "INTERNAL HANDBOOKS".
+    3. **Be Specific:** List scores, opponents, specific dates, and deadlines. Avoid vague summaries.
+    4. **No Meta-Talk:** Do not mention "internal docs", "context", or "training data".
+    5. **Formatting:** Use **bold** for key terms and bullet points for lists. Use Markdown links `[Link Name](URL)`.
     """
 
     try:
