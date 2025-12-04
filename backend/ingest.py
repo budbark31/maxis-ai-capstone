@@ -116,8 +116,7 @@ def fetch_url(url: str):
             soup = BeautifulSoup(response.content, "html.parser")
             result["title"] = soup.title.string.strip() if soup.title else "Untitled"
 
-            # --- CRITICAL FIX: KEPT 'NAV' ---
-            # Only remove scripts and styles. We need NAV for the sports list!
+            # Only remove scripts and styles, need NAV for the sports list!
             for element in soup(["script", "style", "noscript", "header", "footer"]):
                 element.extract()
             
